@@ -1,0 +1,16 @@
+[workspace]
+members = [
+  "crates/task-core",
+  "crates/task-store",
+  "crates/task-sync",
+  "crates/tasknotes-provider",
+  "crates/calendar-provider",
+  "crates/llm-provider",
+]
+exclude = ["apps/desktop/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://example.invalid/todo-app"

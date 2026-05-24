@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use rusqlite::{params, Connection};
 use task_core::{DeadlineType, EnergyLevel, Priority, Task, TaskId, TaskStatus, TimeBlock};
+use task_sync::{ExternalLink, ExternalProvider, SyncState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
@@ -19,6 +20,26 @@ pub trait TaskStore {
     fn list_tasks_by_status(&self, status: TaskStatus) -> Result<Vec<Task>, StoreError>;
     fn reorder_tasks(&mut self, task_ids: &[TaskId]) -> Result<(), StoreError>;
     fn delete_task(&mut self, id: &TaskId) -> Result<(), StoreError>;
+}
+
+pub trait ExternalLinkStore {
+    fn upsert_external_link(&mut self, link: ExternalLink) -> Result<(), StoreError>;
+    fn get_external_link(&self, id: &str) -> Result<Option<ExternalLink>, StoreError>;
+    fn get_external_link_by_external_id(
+        &self,
+        provider: &ExternalProvider,
+        external_id: &str,
+    ) -> Result<Option<ExternalLink>, StoreError>;
+    fn get_external_link_by_external_path(
+        &self,
+        provider: &ExternalProvider,
+        external_path: &str,
+    ) -> Result<Option<ExternalLink>, StoreError>;
+    fn list_external_links_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Vec<ExternalLink>, StoreError>;
+    fn list_external_links(&self) -> Result<Vec<ExternalLink>, StoreError>;
 }
 
 #[derive(Debug, Default)]
@@ -115,6 +136,29 @@ impl SqliteTaskStore {
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
                 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at_ms ON tasks(updated_at_ms);
+
+                CREATE TABLE IF NOT EXISTS external_links (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    external_id TEXT,
+                    external_path TEXT,
+                    last_synced_at_ms INTEGER,
+                    sync_hash TEXT,
+                    sync_state TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_external_links_task_provider
+                    ON external_links(task_id, provider);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_external_links_provider_external_id
+                    ON external_links(provider, external_id)
+                    WHERE external_id IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_external_links_provider_external_path
+                    ON external_links(provider, external_path)
+                    WHERE external_path IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_external_links_sync_state
+                    ON external_links(sync_state);
                 ",
             )
             .map_err(sqlite_error)?;
@@ -158,6 +202,128 @@ impl SqliteTaskStore {
         }
 
         Ok(false)
+    }
+}
+
+impl ExternalLinkStore for SqliteTaskStore {
+    fn upsert_external_link(&mut self, link: ExternalLink) -> Result<(), StoreError> {
+        self.connection
+            .execute(
+                "
+                INSERT INTO external_links (
+                    id,
+                    task_id,
+                    provider,
+                    external_id,
+                    external_path,
+                    last_synced_at_ms,
+                    sync_hash,
+                    sync_state
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ON CONFLICT(id) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    provider = excluded.provider,
+                    external_id = excluded.external_id,
+                    external_path = excluded.external_path,
+                    last_synced_at_ms = excluded.last_synced_at_ms,
+                    sync_hash = excluded.sync_hash,
+                    sync_state = excluded.sync_state
+                ",
+                params![
+                    link.id,
+                    link.task_id,
+                    external_provider_to_str(&link.provider),
+                    link.external_id,
+                    link.external_path,
+                    link.last_synced_at_ms,
+                    link.sync_hash,
+                    sync_state_to_str(&link.sync_state),
+                ],
+            )
+            .map_err(sqlite_error)?;
+
+        Ok(())
+    }
+
+    fn get_external_link(&self, id: &str) -> Result<Option<ExternalLink>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT * FROM external_links WHERE id = ?1")
+            .map_err(sqlite_error)?;
+        let mut rows = statement.query(params![id]).map_err(sqlite_error)?;
+        match rows.next().map_err(sqlite_error)? {
+            Some(row) => external_link_from_row(row).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn get_external_link_by_external_id(
+        &self,
+        provider: &ExternalProvider,
+        external_id: &str,
+    ) -> Result<Option<ExternalLink>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT * FROM external_links WHERE provider = ?1 AND external_id = ?2")
+            .map_err(sqlite_error)?;
+        let mut rows = statement
+            .query(params![external_provider_to_str(provider), external_id])
+            .map_err(sqlite_error)?;
+        match rows.next().map_err(sqlite_error)? {
+            Some(row) => external_link_from_row(row).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn get_external_link_by_external_path(
+        &self,
+        provider: &ExternalProvider,
+        external_path: &str,
+    ) -> Result<Option<ExternalLink>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT * FROM external_links WHERE provider = ?1 AND external_path = ?2")
+            .map_err(sqlite_error)?;
+        let mut rows = statement
+            .query(params![external_provider_to_str(provider), external_path])
+            .map_err(sqlite_error)?;
+        match rows.next().map_err(sqlite_error)? {
+            Some(row) => external_link_from_row(row).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn list_external_links_for_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Vec<ExternalLink>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT * FROM external_links WHERE task_id = ?1 ORDER BY provider ASC, id ASC",
+            )
+            .map_err(sqlite_error)?;
+        let mut rows = statement.query(params![task_id]).map_err(sqlite_error)?;
+        let mut links = Vec::new();
+        while let Some(row) = rows.next().map_err(sqlite_error)? {
+            links.push(external_link_from_row(row)?);
+        }
+
+        Ok(links)
+    }
+
+    fn list_external_links(&self) -> Result<Vec<ExternalLink>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT * FROM external_links ORDER BY provider ASC, id ASC")
+            .map_err(sqlite_error)?;
+        let mut rows = statement.query([]).map_err(sqlite_error)?;
+        let mut links = Vec::new();
+        while let Some(row) = rows.next().map_err(sqlite_error)? {
+            links.push(external_link_from_row(row)?);
+        }
+
+        Ok(links)
     }
 }
 
@@ -350,8 +516,65 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> Result<Task, StoreError> {
     })
 }
 
+fn external_link_from_row(row: &rusqlite::Row<'_>) -> Result<ExternalLink, StoreError> {
+    let provider: String = row.get("provider").map_err(sqlite_error)?;
+    let sync_state: String = row.get("sync_state").map_err(sqlite_error)?;
+
+    Ok(ExternalLink {
+        id: row.get("id").map_err(sqlite_error)?,
+        task_id: row.get("task_id").map_err(sqlite_error)?,
+        provider: parse_external_provider(&provider),
+        external_id: row.get("external_id").map_err(sqlite_error)?,
+        external_path: row.get("external_path").map_err(sqlite_error)?,
+        last_synced_at_ms: row.get("last_synced_at_ms").map_err(sqlite_error)?,
+        sync_hash: row.get("sync_hash").map_err(sqlite_error)?,
+        sync_state: parse_sync_state(&sync_state)?,
+    })
+}
+
 fn sqlite_error(error: rusqlite::Error) -> StoreError {
     StoreError::Backend(error.to_string())
+}
+
+fn external_provider_to_str(provider: &ExternalProvider) -> &str {
+    match provider {
+        ExternalProvider::TaskNotes => "TaskNotes",
+        ExternalProvider::Calendar => "Calendar",
+        ExternalProvider::Llm => "Llm",
+        ExternalProvider::Other(value) => value.as_str(),
+    }
+}
+
+fn parse_external_provider(value: &str) -> ExternalProvider {
+    match value {
+        "TaskNotes" => ExternalProvider::TaskNotes,
+        "Calendar" => ExternalProvider::Calendar,
+        "Llm" => ExternalProvider::Llm,
+        other => ExternalProvider::Other(other.into()),
+    }
+}
+
+fn sync_state_to_str(sync_state: &SyncState) -> &'static str {
+    match sync_state {
+        SyncState::Linked => "Linked",
+        SyncState::PendingLocalCreate => "PendingLocalCreate",
+        SyncState::PendingLocalUpdate => "PendingLocalUpdate",
+        SyncState::PendingRemoteUpdate => "PendingRemoteUpdate",
+        SyncState::Conflict => "Conflict",
+        SyncState::DeletedRemote => "DeletedRemote",
+    }
+}
+
+fn parse_sync_state(value: &str) -> Result<SyncState, StoreError> {
+    match value {
+        "Linked" => Ok(SyncState::Linked),
+        "PendingLocalCreate" => Ok(SyncState::PendingLocalCreate),
+        "PendingLocalUpdate" => Ok(SyncState::PendingLocalUpdate),
+        "PendingRemoteUpdate" => Ok(SyncState::PendingRemoteUpdate),
+        "Conflict" => Ok(SyncState::Conflict),
+        "DeletedRemote" => Ok(SyncState::DeletedRemote),
+        _ => Err(StoreError::Backend(format!("unknown sync state: {value}"))),
+    }
 }
 
 fn status_to_str(status: &TaskStatus) -> &'static str {
@@ -440,6 +663,57 @@ mod tests {
     };
 
     use super::*;
+
+    fn temp_store_path(label: &str) -> std::path::PathBuf {
+        env::temp_dir().join(format!(
+            "todo-app-{label}-{}-{}.sqlite3",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after Unix epoch")
+                .as_nanos()
+        ))
+    }
+
+    fn test_task(id: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: "Linked task".into(),
+            notes: None,
+            status: TaskStatus::Inbox,
+            priority: Priority::Normal,
+            due_at_ms: None,
+            deadline_type: DeadlineType::None,
+            scheduled: None,
+            estimate_minutes: None,
+            energy_level: None,
+            context: None,
+            tags: Vec::new(),
+            project_id: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            completed_at_ms: None,
+            sort_order: 1,
+        }
+    }
+
+    fn tasknotes_link(
+        id: &str,
+        task_id: &str,
+        external_id: &str,
+        external_path: &str,
+    ) -> ExternalLink {
+        ExternalLink {
+            id: id.into(),
+            task_id: task_id.into(),
+            provider: ExternalProvider::TaskNotes,
+            external_id: Some(external_id.into()),
+            external_path: Some(external_path.into()),
+            last_synced_at_ms: Some(100),
+            sync_hash: Some("hash-1".into()),
+            sync_state: SyncState::Linked,
+        }
+    }
 
     #[test]
     fn sqlite_store_persists_tasks_after_reopen() {
@@ -658,6 +932,164 @@ mod tests {
                 .map(|task| task.id)
                 .collect::<Vec<_>>(),
             vec!["task-third", "task-first", "task-second"]
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_store_persists_external_links_after_reopen() {
+        let path = temp_store_path("external-link-persist");
+        let task = test_task("task-linked");
+        let link = tasknotes_link(
+            "link-1",
+            &task.id,
+            "tasknotes-1",
+            "Tasks/write-sync-tests.md",
+        );
+
+        {
+            let mut store = SqliteTaskStore::open(&path).expect("store should open");
+            store.upsert_task(task.clone()).expect("task should insert");
+            store
+                .upsert_external_link(link.clone())
+                .expect("link should insert");
+        }
+
+        let store = SqliteTaskStore::open(&path).expect("store should reopen");
+        assert_eq!(
+            store
+                .get_external_link_by_external_id(&ExternalProvider::TaskNotes, "tasknotes-1")
+                .expect("link should load"),
+            Some(link.clone())
+        );
+        assert_eq!(
+            store
+                .get_external_link_by_external_path(
+                    &ExternalProvider::TaskNotes,
+                    "Tasks/write-sync-tests.md"
+                )
+                .expect("link should load"),
+            Some(link.clone())
+        );
+        assert_eq!(
+            store
+                .list_external_links_for_task(&task.id)
+                .expect("links should load"),
+            vec![link]
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_store_upserts_existing_external_link_without_duplicate() {
+        let path = temp_store_path("external-link-upsert");
+        let task = test_task("task-linked");
+        let mut store = SqliteTaskStore::open(&path).expect("store should open");
+        store.upsert_task(task.clone()).expect("task should insert");
+
+        let mut link = tasknotes_link("link-1", &task.id, "tasknotes-1", "Tasks/original.md");
+        store
+            .upsert_external_link(link.clone())
+            .expect("link should insert");
+
+        link.external_path = Some("Archive/original.md".into());
+        link.sync_hash = Some("hash-2".into());
+        link.last_synced_at_ms = Some(200);
+        store
+            .upsert_external_link(link.clone())
+            .expect("link should update");
+
+        assert_eq!(
+            store
+                .list_external_links_for_task(&task.id)
+                .expect("links should load"),
+            vec![link]
+        );
+        assert_eq!(
+            store
+                .list_external_links()
+                .expect("all links should load")
+                .len(),
+            1
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_store_rejects_duplicate_tasknotes_external_id() {
+        let path = temp_store_path("external-link-duplicate-id");
+        let mut store = SqliteTaskStore::open(&path).expect("store should open");
+        let first_task = test_task("task-first");
+        let second_task = test_task("task-second");
+        store
+            .upsert_task(first_task.clone())
+            .expect("first task should insert");
+        store
+            .upsert_task(second_task.clone())
+            .expect("second task should insert");
+
+        let first_link = tasknotes_link("link-1", &first_task.id, "shared-id", "Tasks/one.md");
+        let second_link = tasknotes_link("link-2", &second_task.id, "shared-id", "Tasks/two.md");
+        store
+            .upsert_external_link(first_link)
+            .expect("first link should insert");
+
+        assert!(matches!(
+            store.upsert_external_link(second_link),
+            Err(StoreError::Backend(_))
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_store_rejects_duplicate_tasknotes_external_path() {
+        let path = temp_store_path("external-link-duplicate-path");
+        let mut store = SqliteTaskStore::open(&path).expect("store should open");
+        let first_task = test_task("task-first");
+        let second_task = test_task("task-second");
+        store
+            .upsert_task(first_task.clone())
+            .expect("first task should insert");
+        store
+            .upsert_task(second_task.clone())
+            .expect("second task should insert");
+
+        let first_link = tasknotes_link("link-1", &first_task.id, "first-id", "Tasks/shared.md");
+        let second_link = tasknotes_link("link-2", &second_task.id, "second-id", "Tasks/shared.md");
+        store
+            .upsert_external_link(first_link)
+            .expect("first link should insert");
+
+        assert!(matches!(
+            store.upsert_external_link(second_link),
+            Err(StoreError::Backend(_))
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn sqlite_store_cascades_external_links_when_task_is_deleted() {
+        let path = temp_store_path("external-link-cascade");
+        let task = test_task("task-linked");
+        let link = tasknotes_link("link-1", &task.id, "tasknotes-1", "Tasks/delete-me.md");
+        let mut store = SqliteTaskStore::open(&path).expect("store should open");
+        store.upsert_task(task.clone()).expect("task should insert");
+        store
+            .upsert_external_link(link.clone())
+            .expect("link should insert");
+
+        store.delete_task(&task.id).expect("task should be deleted");
+
+        assert_eq!(
+            store
+                .get_external_link(&link.id)
+                .expect("link lookup should succeed"),
+            None
         );
 
         let _ = fs::remove_file(path);

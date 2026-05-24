@@ -9,6 +9,7 @@ repository.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
 task-core = { path = "../task-core" }
+task-sync = { path = "../task-sync" }
 
 [lib]
 path = "src/lib.rs"

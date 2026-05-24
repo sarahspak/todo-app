@@ -233,6 +233,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "task-core",
+ "task-sync",
 ]
 
 [[package]]
@@ -247,6 +248,7 @@ name = "tasknotes-provider"
 version = "0.1.0"
 dependencies = [
  "task-core",
+ "task-store",
  "task-sync",
 ]
 

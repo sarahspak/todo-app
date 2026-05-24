@@ -358,21 +358,21 @@ The provider interface should normalize requests and responses into app-owned ty
 
 Build the first version as a macOS desktop app with:
 
-- Local SQLite task storage.
-- A basic task inbox.
-- Today and upcoming views.
-- Manual scheduling onto a timeline.
-- A simple automatic scheduler based on due date, priority, estimate, and available time.
-- Optional LLM setup during onboarding.
-- LLM-assisted task capture, duration estimates, task splitting, and schedule suggestions.
-- Read-only TaskNotes import.
-- Google Calendar read access.
+- [x] Local SQLite task storage. Implemented in `067cf4e` with `SqliteTaskStore`, task persistence, task listing, updates, deletion, completion, and persisted sort order.
+- [x] A basic task inbox. Implemented across `2c66e17` and `067cf4e` with an Inbox view, task creation, editing, completion, deletion, duplication, keyboard save, and drag reordering.
+- [ ] Today and upcoming views. The desktop shell has a Today navigation item, but there is no real Today or upcoming task view yet.
+- [ ] Manual scheduling onto a timeline. The UI has a static timeline mockup only; scheduled task editing is not wired.
+- [ ] A simple automatic scheduler based on due date, priority, estimate, and available time. `task-core` has a tested `GreedyScheduler`, but it is not wired into the desktop app workflow yet.
+- [ ] Optional LLM setup during onboarding. LLM provider contracts and stubs exist, but there is no onboarding flow or credential setup.
+- [ ] LLM-assisted task capture, duration estimates, task splitting, and schedule suggestions. Provider contracts exist, but no real LLM adapter or task workflow is implemented.
+- [ ] Read-only TaskNotes import. `tasknotes-provider` defines the integration boundary, but `import_tasks` currently returns an empty list.
+- [ ] Google Calendar read access. Calendar provider contracts exist, but there is no Google Calendar adapter or OAuth flow.
 
 After that works, add:
 
-- Two-way TaskNotes sync.
-- Google Calendar write access.
-- Apple Calendar read/write access.
-- More LLM provider adapters.
-- Web app support.
-- iOS support.
+- [ ] Two-way TaskNotes sync.
+- [ ] Google Calendar write access.
+- [ ] Apple Calendar read/write access.
+- [ ] More LLM provider adapters.
+- [ ] Web app support.
+- [ ] iOS support.

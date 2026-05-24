@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 task-core = { path = "../task-core" }
+task-store = { path = "../task-store" }
 task-sync = { path = "../task-sync" }
 
 [lib]

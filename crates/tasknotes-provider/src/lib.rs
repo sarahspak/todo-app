@@ -1,6 +1,10 @@
 //! TaskNotes integration boundary.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use task_core::{DeadlineType, Priority, Task, TaskStatus};
 use task_store::{ExternalLinkStore, StoreError, TaskStore};
@@ -340,8 +344,12 @@ impl TaskSyncProvider for TaskNotesProvider {
     }
 
     fn preview(&self) -> Result<SyncPreview, SyncError> {
+        if self.config.mode == SyncMode::Off {
+            return Err(SyncError::Disabled);
+        }
+
         Ok(SyncPreview {
-            creates: Vec::new(),
+            creates: self.import_tasks()?,
             updates: Vec::new(),
             conflicts: Vec::new(),
         })
@@ -352,7 +360,13 @@ impl TaskSyncProvider for TaskNotesProvider {
             return Err(SyncError::Disabled);
         }
 
-        Ok(Vec::new())
+        let now_ms = now_ms()?;
+        scan_tasknotes_documents(&self.config.vault_path).map(|documents| {
+            documents
+                .iter()
+                .map(|document| task_from_document(document, now_ms))
+                .collect()
+        })
     }
 
     fn push_tasks(&self, _tasks: &[Task]) -> Result<(), SyncError> {
@@ -361,6 +375,13 @@ impl TaskSyncProvider for TaskNotesProvider {
             SyncMode::Off | SyncMode::ImportOnly => Err(SyncError::Disabled),
         }
     }
+}
+
+fn now_ms() -> Result<i64, SyncError> {
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|error| {
+        SyncError::Provider(format!("system clock is before Unix epoch: {error}"))
+    })?;
+    Ok(duration.as_millis() as i64)
 }
 
 #[cfg(test)]
@@ -612,6 +633,47 @@ title: Write sync tests
         );
 
         let _ = fs::remove_dir_all(vault);
+    }
+
+    #[test]
+    fn provider_import_tasks_reads_scanned_vault_documents() {
+        let vault = temp_vault_path("tasknotes-provider-import");
+        fs::create_dir_all(vault.join("Tasks")).expect("tasks dir should create");
+        fs::write(
+            vault.join("Tasks/write-sync-tests.md"),
+            "---\nid: tasknotes-1\ntitle: Write sync tests\n---\n\nBody text.",
+        )
+        .expect("task file should write");
+        let provider = TaskNotesProvider::new(TaskNotesConfig {
+            vault_path: vault.to_string_lossy().to_string(),
+            tasks_glob: "**/*.md".into(),
+            mode: SyncMode::TwoWay,
+        });
+
+        let tasks = provider
+            .import_tasks()
+            .expect("provider import should load tasks");
+        let preview = provider.preview().expect("preview should load tasks");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "tasknotes-id-tasknotes-1");
+        assert_eq!(tasks[0].title, "Write sync tests");
+        assert_eq!(tasks[0].notes, Some("Body text.".into()));
+        assert_eq!(preview.creates.len(), 1);
+
+        let _ = fs::remove_dir_all(vault);
+    }
+
+    #[test]
+    fn provider_import_tasks_is_disabled_when_mode_is_off() {
+        let provider = TaskNotesProvider::new(TaskNotesConfig {
+            vault_path: "/tmp/unused".into(),
+            tasks_glob: "**/*.md".into(),
+            mode: SyncMode::Off,
+        });
+
+        assert_eq!(provider.import_tasks(), Err(SyncError::Disabled));
+        assert_eq!(provider.preview(), Err(SyncError::Disabled));
     }
 
     fn task(id: &str, title: &str) -> Task {

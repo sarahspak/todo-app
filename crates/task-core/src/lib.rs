@@ -1,10 +1,12 @@
 //! Core task and scheduling types.
 
+use serde::{Deserialize, Serialize};
+
 pub type TaskId = String;
 pub type ProjectId = String;
 pub type TimestampMs = i64;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TaskStatus {
     Inbox,
     Planned,
@@ -13,7 +15,7 @@ pub enum TaskStatus {
     Canceled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Priority {
     Low,
     Normal,
@@ -21,21 +23,21 @@ pub enum Priority {
     Urgent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum DeadlineType {
     None,
     Soft,
     Hard,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum EnergyLevel {
     Low,
     Medium,
     High,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TimeBlock {
     pub start_ms: TimestampMs,
     pub end_ms: TimestampMs,
@@ -51,7 +53,7 @@ impl TimeBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Task {
     pub id: TaskId,
     pub title: String,
@@ -68,29 +70,31 @@ pub struct Task {
     pub project_id: Option<ProjectId>,
     pub created_at_ms: TimestampMs,
     pub updated_at_ms: TimestampMs,
+    pub completed_at_ms: Option<TimestampMs>,
+    pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CalendarBusyBlock {
     pub source: String,
     pub block: TimeBlock,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ScheduleRequest {
     pub tasks: Vec<Task>,
     pub busy: Vec<CalendarBusyBlock>,
     pub candidate_blocks: Vec<TimeBlock>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ScheduledTask {
     pub task_id: TaskId,
     pub block: TimeBlock,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SchedulePlan {
     pub scheduled: Vec<ScheduledTask>,
     pub unscheduled_task_ids: Vec<TaskId>,
@@ -212,6 +216,8 @@ mod tests {
                 project_id: None,
                 created_at_ms: 0,
                 updated_at_ms: 0,
+                completed_at_ms: None,
+                sort_order: 0,
             }],
             busy: vec![CalendarBusyBlock {
                 source: "calendar".into(),

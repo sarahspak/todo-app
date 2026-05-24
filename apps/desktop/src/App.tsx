@@ -1,4 +1,11 @@
-import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Bell,
   Bot,
@@ -6,13 +13,18 @@ import {
   ChevronDown,
   CheckCircle2,
   Clock3,
+  Copy,
   Database,
   FileText,
   Flag,
   Inbox,
   MoreHorizontal,
   Paperclip,
+  Pencil,
+  Plus,
   Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
 
 const tasks = [
@@ -42,15 +54,298 @@ const providers = [
 
 type View = "inbox" | "today" | "schedule" | "suggestions";
 
+type Task = {
+  id: string;
+  title: string;
+  notes?: string | null;
+  status: "Inbox" | "Planned" | "InProgress" | "Done" | "Canceled";
+  priority: "Low" | "Normal" | "High" | "Urgent";
+  due_at_ms?: number | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+  completed_at_ms?: number | null;
+  sort_order: number;
+};
+
+type TaskDragState = {
+  id: string;
+  startY: number;
+  didDrag: boolean;
+};
+
 export function App() {
   const [activeView, setActiveView] = useState<View>("inbox");
   const [taskEditorOpen, setTaskEditorOpen] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [inboxTasks, setInboxTasks] = useState<Task[]>([]);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [openTaskMenuId, setOpenTaskMenuId] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+  const [taskSubmitting, setTaskSubmitting] = useState(false);
+  const inboxTasksRef = useRef<Task[]>([]);
+  const taskDragRef = useRef<TaskDragState | null>(null);
+  const suppressTaskClickRef = useRef(false);
   const isInbox = activeView === "inbox";
+
+  useEffect(() => {
+    inboxTasksRef.current = inboxTasks;
+  }, [inboxTasks]);
+
+  useEffect(() => {
+    invoke<Task[]>("list_tasks", { input: { status: "Inbox" } })
+      .then((loadedTasks) => {
+        setInboxTasks(loadedTasks);
+      })
+      .catch((error) => {
+        setTaskError(String(error));
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!taskEditorOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeTaskEditor();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [taskEditorOpen]);
 
   const closeTaskEditor = () => {
     setTaskEditorOpen(false);
+    setEditingTaskId(null);
     setTaskTitle("");
+    setTaskDescription("");
+    setTaskError(null);
+    setTaskSubmitting(false);
+  };
+
+  const openNewTaskEditor = () => {
+    setEditingTaskId(null);
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskError(null);
+    setOpenTaskMenuId(null);
+    setTaskEditorOpen(true);
+  };
+
+  const openEditTaskEditor = (task: Task) => {
+    setEditingTaskId(task.id);
+    setTaskTitle(task.title);
+    setTaskDescription(task.notes ?? "");
+    setTaskError(null);
+    setOpenTaskMenuId(null);
+    setTaskEditorOpen(true);
+  };
+
+  const saveInboxTask = async () => {
+    const title = taskTitle.trim();
+    if (!title) {
+      return;
+    }
+
+    setTaskSubmitting(true);
+    setTaskError(null);
+
+    try {
+      if (editingTaskId) {
+        const task = await invoke<Task>("update_task", {
+          input: {
+            id: editingTaskId,
+            title,
+            notes: taskDescription.trim() || null,
+          },
+        });
+        setInboxTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.id === task.id ? task : currentTask,
+          ),
+        );
+      } else {
+        const task = await invoke<Task>("create_task", {
+          input: {
+            title,
+            notes: taskDescription.trim() || null,
+            priority: "Normal",
+          },
+        });
+        setInboxTasks((currentTasks) => [...currentTasks, task]);
+      }
+      closeTaskEditor();
+    } catch (error) {
+      setTaskError(String(error));
+      setTaskSubmitting(false);
+    }
+  };
+
+  const saveTaskOnCommandEnter = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.metaKey && event.key === "Enter" && !taskSubmitting) {
+      event.preventDefault();
+      void saveInboxTask();
+    }
+  };
+
+  const duplicateInboxTask = async (taskToDuplicate: Task) => {
+    setTaskError(null);
+    setOpenTaskMenuId(null);
+
+    try {
+      const duplicatedTask = await invoke<Task>("create_task", {
+        input: {
+          title: `${taskToDuplicate.title} copy`,
+          notes: taskToDuplicate.notes ?? null,
+          priority: taskToDuplicate.priority,
+          due_at_ms: taskToDuplicate.due_at_ms ?? null,
+        },
+      });
+      setInboxTasks((currentTasks) => {
+        const taskIndex = currentTasks.findIndex(
+          (task) => task.id === taskToDuplicate.id,
+        );
+        if (taskIndex === -1) {
+          return [...currentTasks, duplicatedTask];
+        }
+
+        return [
+          ...currentTasks.slice(0, taskIndex + 1),
+          duplicatedTask,
+          ...currentTasks.slice(taskIndex + 1),
+        ];
+      });
+    } catch (error) {
+      setTaskError(String(error));
+    }
+  };
+
+  const deleteInboxTask = async (id: string) => {
+    setTaskError(null);
+    setOpenTaskMenuId(null);
+
+    try {
+      await invoke("delete_task", { id });
+      setInboxTasks((currentTasks) =>
+        currentTasks.filter((task) => task.id !== id),
+      );
+    } catch (error) {
+      setTaskError(String(error));
+    }
+  };
+
+  const completeInboxTask = async (id: string) => {
+    setTaskError(null);
+    setOpenTaskMenuId(null);
+
+    try {
+      await invoke<Task>("complete_task", { id });
+      setInboxTasks((currentTasks) =>
+        currentTasks.filter((task) => task.id !== id),
+      );
+    } catch (error) {
+      setTaskError(String(error));
+    }
+  };
+
+  const persistTaskOrder = async (orderedTasks: Task[]) => {
+    try {
+      await invoke("reorder_tasks", {
+        input: { task_ids: orderedTasks.map((task) => task.id) },
+      });
+    } catch (error) {
+      setTaskError(String(error));
+    }
+  };
+
+  const reorderTaskList = (tasksToOrder: Task[], draggedId: string, targetId: string) => {
+    const draggedIndex = tasksToOrder.findIndex((task) => task.id === draggedId);
+    const targetIndex = tasksToOrder.findIndex((task) => task.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) {
+      return tasksToOrder;
+    }
+
+    const nextTasks = [...tasksToOrder];
+    const [draggedTask] = nextTasks.splice(draggedIndex, 1);
+    nextTasks.splice(targetIndex, 0, draggedTask);
+
+    return nextTasks.map((task, index) => ({
+      ...task,
+      sort_order: index,
+    }));
+  };
+
+  const findTaskIdAtPoint = (x: number, y: number) => {
+    return document
+      .elementsFromPoint(x, y)
+      .map((element) => element.closest<HTMLElement>("[data-task-id]"))
+      .find(Boolean)?.dataset.taskId;
+  };
+
+  const startTaskPointerDrag = (event: PointerEvent<HTMLElement>, id: string) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    taskDragRef.current = {
+      id,
+      startY: event.clientY,
+      didDrag: false,
+    };
+    setOpenTaskMenuId(null);
+  };
+
+  const moveTaskPointerDrag = (event: PointerEvent<HTMLElement>) => {
+    const dragState = taskDragRef.current;
+    if (!dragState) {
+      return;
+    }
+
+    const movedFarEnough = Math.abs(event.clientY - dragState.startY) > 5;
+    if (!dragState.didDrag && !movedFarEnough) {
+      return;
+    }
+
+    event.preventDefault();
+    dragState.didDrag = true;
+    suppressTaskClickRef.current = true;
+    setDraggedTaskId(dragState.id);
+
+    const targetId = findTaskIdAtPoint(event.clientX, event.clientY);
+    setDragOverTaskId(targetId ?? null);
+
+    if (targetId && targetId !== dragState.id) {
+      const nextTasks = reorderTaskList(inboxTasksRef.current, dragState.id, targetId);
+      if (nextTasks !== inboxTasksRef.current) {
+        inboxTasksRef.current = nextTasks;
+        setInboxTasks(nextTasks);
+      }
+    }
+  };
+
+  const endTaskPointerDrag = (event?: PointerEvent<HTMLElement>) => {
+    if (event?.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    const dragState = taskDragRef.current;
+    taskDragRef.current = null;
+    setDraggedTaskId(null);
+    setDragOverTaskId(null);
+
+    if (dragState?.didDrag) {
+      void persistTaskOrder(inboxTasksRef.current);
+      window.setTimeout(() => {
+        suppressTaskClickRef.current = false;
+      }, 0);
+    }
   };
 
   return (
@@ -99,92 +394,285 @@ export function App() {
             <header className="inbox-header">
               <h1 id="inbox-title">Inbox</h1>
             </header>
-            <div className="empty-inbox">
-              <button
-                className="add-task-button"
-                onClick={() => setTaskEditorOpen(true)}
-              >
-                + Add task
-              </button>
-            </div>
-            {taskEditorOpen ? (
-              <div className="task-popover-backdrop" role="presentation">
-                <form
-                  aria-label="Add task"
-                  className="task-editor-popover"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (taskTitle.trim()) {
-                      closeTaskEditor();
-                    }
-                  }}
-                >
-                  <div className="task-editor-fields">
-                    <input
-                      aria-label="Task name"
-                      autoFocus
-                      className="task-title-input"
-                      onChange={(event) => setTaskTitle(event.target.value)}
-                      placeholder="Task name"
-                      value={taskTitle}
-                    />
-                    <textarea
-                      aria-label="Description"
-                      className="task-description-input"
-                      placeholder="Description"
-                      rows={2}
-                    />
-                  </div>
-
-                  <div className="task-editor-tools" aria-label="Task options">
-                    <button type="button" className="task-tool-button">
-                      <CalendarDays aria-hidden="true" />
-                      Date
-                    </button>
-                    <button type="button" className="task-tool-button">
-                      <Paperclip aria-hidden="true" />
-                      Attachment
-                    </button>
-                    <button type="button" className="task-tool-button">
-                      <Flag aria-hidden="true" />
-                      Priority
-                    </button>
-                    <button type="button" className="task-tool-button">
-                      <Bell aria-hidden="true" />
-                      Reminders
-                    </button>
+            {inboxTasks.length > 0 ? (
+              <div className="inbox-task-list">
+                {inboxTasks.map((task) => (
+                  <article
+                    className={`inbox-task-row ${
+                      draggedTaskId === task.id ? "dragging" : ""
+                    } ${dragOverTaskId === task.id ? "drag-over" : ""}`}
+                    data-task-id={task.id}
+                    key={task.id}
+                  >
                     <button
-                      aria-label="More actions"
+                      aria-label={`Complete ${task.title}`}
+                      className="task-complete-ring"
+                      onClick={() => {
+                        void completeInboxTask(task.id);
+                      }}
                       type="button"
-                      className="task-icon-button"
+                    />
+                    <div
+                      className="task-content-button"
+                      onClick={() => {
+                        if (suppressTaskClickRef.current) {
+                          suppressTaskClickRef.current = false;
+                          return;
+                        }
+                        openEditTaskEditor(task);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openEditTaskEditor(task);
+                        }
+                      }}
+                      onPointerCancel={endTaskPointerDrag}
+                      onPointerDown={(event) => startTaskPointerDrag(event, task.id)}
+                      onPointerMove={moveTaskPointerDrag}
+                      onPointerUp={endTaskPointerDrag}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <h2>{task.title}</h2>
+                      {task.notes ? <p>{task.notes}</p> : null}
+                    </div>
+                    <button
+                      aria-expanded={openTaskMenuId === task.id}
+                      aria-haspopup="menu"
+                      aria-label={`More actions for ${task.title}`}
+                      className="task-row-icon-button"
+                      onClick={() => {
+                        setOpenTaskMenuId((currentId) =>
+                          currentId === task.id ? null : task.id,
+                        );
+                      }}
+                      type="button"
                     >
                       <MoreHorizontal aria-hidden="true" />
                     </button>
-                  </div>
-
-                  <footer className="task-editor-footer">
-                    <button type="button" className="project-picker">
+                    {openTaskMenuId === task.id ? (
+                      <div className="task-row-menu" role="menu">
+                        <button
+                          onClick={() => {
+                            openEditTaskEditor(task);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <Pencil aria-hidden="true" />
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => {
+                            void duplicateInboxTask(task);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <Copy aria-hidden="true" />
+                          Duplicate
+                        </button>
+                        <button
+                          className="danger-menu-item"
+                          onClick={() => {
+                            void deleteInboxTask(task.id);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          <Trash2 aria-hidden="true" />
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+                <button
+                  className="inline-add-task-button"
+                  onClick={openNewTaskEditor}
+                >
+                  + Add task
+                </button>
+              </div>
+            ) : (
+              <div className="empty-inbox">
+                <button
+                  className="add-task-button"
+                  onClick={openNewTaskEditor}
+                >
+                  + Add task
+                </button>
+              </div>
+            )}
+            {taskEditorOpen ? (
+              <div className="task-modal-backdrop" role="presentation">
+                <form
+                  aria-label={editingTaskId ? "Edit task" : "Add task"}
+                  className="task-detail-modal"
+                  role="dialog"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    await saveInboxTask();
+                  }}
+                >
+                  <header className="task-detail-header">
+                    <button className="task-detail-project" type="button">
                       <Inbox aria-hidden="true" />
                       Inbox
-                      <ChevronDown aria-hidden="true" />
                     </button>
-                    <div className="task-editor-actions">
+                    <div className="task-detail-header-actions">
                       <button
+                        aria-label="More actions"
+                        className="task-detail-icon-button"
                         type="button"
+                      >
+                        <MoreHorizontal aria-hidden="true" />
+                      </button>
+                      <button
                         className="secondary-task-action"
                         onClick={closeTaskEditor}
+                        type="button"
                       >
                         Cancel
                       </button>
                       <button
                         type="submit"
                         className="submit-task-action"
-                        disabled={!taskTitle.trim()}
+                        disabled={!taskTitle.trim() || taskSubmitting}
                       >
-                        Add task
+                        {taskSubmitting
+                          ? editingTaskId
+                            ? "Saving"
+                            : "Adding"
+                          : editingTaskId
+                            ? "Save"
+                            : "Add task"}
+                      </button>
+                      <button
+                        aria-label="Close task"
+                        className="task-detail-icon-button"
+                        onClick={closeTaskEditor}
+                        type="button"
+                      >
+                        <X aria-hidden="true" />
                       </button>
                     </div>
-                  </footer>
+                  </header>
+
+                  <div className="task-detail-body">
+                    <main className="task-detail-main">
+                      <section className="task-overview">
+                        <button
+                          aria-label={
+                            editingTaskId
+                              ? `Complete ${taskTitle || "task"}`
+                              : "Complete task"
+                          }
+                          className="task-detail-checkbox"
+                          onClick={() => {
+                            if (editingTaskId) {
+                              void completeInboxTask(editingTaskId);
+                              closeTaskEditor();
+                            }
+                          }}
+                          type="button"
+                        />
+                        <div className="task-detail-fields">
+                          <input
+                            aria-label="Task name"
+                            autoFocus
+                            className="task-detail-title-input"
+                            onKeyDown={saveTaskOnCommandEnter}
+                            onChange={(event) => setTaskTitle(event.target.value)}
+                            placeholder="Task name"
+                            value={taskTitle}
+                          />
+                          <textarea
+                            aria-label="Task description"
+                            className="task-detail-description-input"
+                            onKeyDown={saveTaskOnCommandEnter}
+                            onChange={(event) =>
+                              setTaskDescription(event.target.value)
+                            }
+                            placeholder="Description"
+                            rows={7}
+                            value={taskDescription}
+                          />
+                        </div>
+                      </section>
+
+                      <button className="task-detail-add-subtask" type="button">
+                        <Plus aria-hidden="true" />
+                        Add sub-task
+                      </button>
+
+                      <section className="task-detail-comments">
+                        <div className="task-comment-avatar">S</div>
+                        <button className="task-comment-button" type="button">
+                          Comment
+                        </button>
+                        <button
+                          aria-label="Attach file"
+                          className="task-detail-icon-button"
+                          type="button"
+                        >
+                          <Paperclip aria-hidden="true" />
+                        </button>
+                      </section>
+                    </main>
+
+                    <aside className="task-detail-sidebar" aria-label="Task details">
+                      <div className="task-detail-property">
+                        <span>Project</span>
+                        <button type="button">
+                          <Inbox aria-hidden="true" />
+                          Inbox
+                          <ChevronDown aria-hidden="true" />
+                        </button>
+                      </div>
+                      <div className="task-detail-property">
+                        <span>Date</span>
+                        <button type="button">
+                          <CalendarDays aria-hidden="true" />
+                          No date
+                        </button>
+                      </div>
+                      <div className="task-detail-property">
+                        <span>Deadline</span>
+                        <button type="button">
+                          <Plus aria-hidden="true" />
+                          Add
+                        </button>
+                      </div>
+                      <div className="task-detail-property">
+                        <span>Priority</span>
+                        <button type="button">
+                          <Flag aria-hidden="true" />
+                          {editingTaskId
+                            ? inboxTasks.find((task) => task.id === editingTaskId)
+                                ?.priority ?? "Normal"
+                            : "Normal"}
+                          <ChevronDown aria-hidden="true" />
+                        </button>
+                      </div>
+                      <div className="task-detail-property">
+                        <span>Labels</span>
+                        <button type="button">
+                          <Plus aria-hidden="true" />
+                          Add
+                        </button>
+                      </div>
+                      <div className="task-detail-property">
+                        <span>Reminders</span>
+                        <button type="button">
+                          <Bell aria-hidden="true" />
+                          Add
+                        </button>
+                      </div>
+                    </aside>
+                  </div>
+                  {taskError ? <p className="task-editor-error">{taskError}</p> : null}
                 </form>
               </div>
             ) : null}

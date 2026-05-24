@@ -84,6 +84,75 @@ Examples:
 - A task can have no external links and still be fully valid.
 - An LLM provider can point to a hosted API, local model gateway, or custom OpenAI-compatible endpoint without changing the task model.
 
+The first prototype schema should borrow heavily from the TaskNotes default task properties, while keeping app-owned IDs and scheduling metadata stable. TaskNotes property keys are configurable, so the app should store semantic fields internally and keep a per-vault field mapping for TaskNotes sync.
+
+Initial app fields should include:
+
+```text
+Task
+  id
+  title
+  body
+  status
+  priority
+  due
+  scheduled
+  contexts
+  projects
+  tags
+  time_estimate_minutes
+  recurrence
+  reminders
+  blocked_by
+  created_at
+  modified_at
+  completed_at
+```
+
+Fields to preserve during TaskNotes round-tripping:
+
+```text
+TaskNotes frontmatter
+  unknown user fields
+  configured custom fields
+  timeEntries
+  completeInstances
+  archive tags
+  plugin-specific calendar fields
+
+Markdown body
+  all user-authored content
+```
+
+Fields likely needed by this app but not assumed to exist in TaskNotes:
+
+```text
+App scheduling metadata
+  schedule_locked
+  schedule_source
+  calendar_event_ids
+  last_suggested_at
+  llm_estimate_source
+```
+
+## Task Details Backend Gaps
+
+The current backend already supports title and description editing through `update_task`; no additional command is needed for that part of the task details modal.
+
+The backend also has task fields for priority, project, and due date. Those controls primarily need frontend wiring first: priority dropdown behavior, project selection, and a date picker that calls the existing update path.
+
+The following task details controls need backend schema, persistence, and Tauri command support before they can do real work:
+
+- Labels.
+- Reminders.
+- Subtasks.
+- Comments.
+- Attachments.
+- Deadline.
+- Location.
+
+These should be added as first-class app-owned concepts, then mapped to TaskNotes or other providers through integration layers where possible.
+
 ## TaskNotes Sync Modes
 
 TaskNotes should support at least three modes:
@@ -110,6 +179,18 @@ Safety behavior: keep conflict snapshots for review or rollback
 ```
 
 Later versions can add field-level merge, manual conflict review, or provider-specific rules.
+
+Direct file access should be the first TaskNotes integration path. It keeps the app local-first, works when Obsidian is closed, supports bulk import/export, and matches TaskNotes' portable Markdown design.
+
+The TaskNotes HTTP API may still be useful later:
+
+- It can respect TaskNotes' own runtime behavior, validation, and configured defaults.
+- It may reduce drift if TaskNotes adds behavior that is not obvious from frontmatter alone.
+- It can let the app ask TaskNotes how the user's property mappings are configured instead of inferring them.
+- It can avoid some file watcher edge cases while Obsidian is actively editing the same task.
+- It may support commands or derived state that are not stored directly in task files.
+
+The tradeoff is that HTTP API sync requires Obsidian and the plugin to be running, introduces connection/authentication setup, and makes the app less independently local-first. The app should not depend on it for MVP.
 
 ## Proposed Rust Workspace
 
@@ -173,6 +254,17 @@ It should eventually support:
 
 The calendar integration should be behind a provider interface, because Apple Calendar, Google Calendar, Microsoft, and CalDAV have different APIs and authorization models.
 
+Google Calendar should be the first calendar integration. The macOS app can add Apple Calendar later for users who use it natively, but the first integration should match the primary source of truth for scheduling.
+
+Calendar implementation order:
+
+```text
+1. Google Calendar read access.
+2. Google Calendar write access.
+3. Apple Calendar read/write access.
+4. CalDAV later, if needed.
+```
+
 The first scheduling UX should be hybrid:
 
 ```text
@@ -213,6 +305,8 @@ Initial LLM-assisted features could include:
 
 LLM responses should be treated as suggestions. The app should validate all structured outputs before writing to the database, TaskNotes, or a calendar.
 
+If the user does not provide an estimate, the LLM can ask follow-up questions, infer a duration, suggest task priority, and propose splitting a large task into smaller discrete tasks. These remain suggestions until the user accepts them or the deterministic scheduler validates them.
+
 The first prototype should support three concrete LLM adapters:
 
 ```text
@@ -236,26 +330,29 @@ The provider interface should normalize requests and responses into app-owned ty
 
 ## Open Questions
 
-1. How much TaskNotes metadata should the app preserve when round-tripping notes?
-2. Should TaskNotes sync use direct vault file access, the TaskNotes HTTP API, or both?
-3. Should the first calendar integration be Apple Calendar, Google Calendar, or generic CalDAV?
-4. Should OpenAI-compatible custom endpoints be supported immediately after OpenAI, Anthropic, and Ollama?
-5. What should the default local-only experience look like when no LLM provider is configured?
-6. How should conflicts be presented to users?
-7. Should the app support cloud sync between devices, or should that wait until after local-first behavior works?
-8. What is the minimum useful task schema for the first prototype?
-9. What scheduling decisions should be deterministic versus LLM-assisted?
-10. How much of onboarding should happen before the user sees the main app?
+1. Should OpenAI-compatible custom endpoints be supported immediately after OpenAI, Anthropic, and Ollama?
+2. What exact TaskNotes field mapping should the app assume before it can read a user's TaskNotes settings?
+3. Which TaskNotes fields should be first-class app fields versus preserved provider metadata?
+4. What should the first conflict review UI show beyond "newest edit wins" snapshots?
+5. How should Google Calendar OAuth be packaged for a desktop app?
+6. Should app scheduling metadata be written into TaskNotes frontmatter, kept only in SQLite, or both?
+7. Which recurrence behavior belongs in MVP?
+8. How much of onboarding should happen before the user sees the main app?
 
 ## Current Decisions
 
 1. First target platform: macOS desktop.
 2. App shell and UI: Tauri 2 with a TypeScript frontend.
-3. Local storage: SQLite from day one. We should be able to read and write data to/from GoogleCal and AppleCalender 
+3. Local storage: SQLite from day one, stored by default in `~/.todo-app`.
 4. TaskNotes sync: direct vault file access first, with optional HTTP API support later.
 5. Scheduling UX: hybrid manual scheduling plus automatic suggestions.
 6. LLM strategy: bring your own provider and API key; LLM support is optional.
 7. First LLM providers: OpenAI, Anthropic, and Ollama.
+8. First calendar provider: Google Calendar read/write, followed by Apple Calendar later.
+9. TaskNotes round-tripping should preserve unknown frontmatter, custom fields, and markdown body content.
+10. MVP conflict policy: newest edit wins with conflict snapshots.
+11. Cloud sync is out of scope for MVP.
+12. MVP onboarding asks about calendar integration and LLM provider, but does not ask for a local database location.
 
 ## Suggested MVP
 
@@ -267,14 +364,15 @@ Build the first version as a macOS desktop app with:
 - Manual scheduling onto a timeline.
 - A simple automatic scheduler based on due date, priority, estimate, and available time.
 - Optional LLM setup during onboarding.
-- LLM-assisted task capture and schedule suggestions.
+- LLM-assisted task capture, duration estimates, task splitting, and schedule suggestions.
 - Read-only TaskNotes import.
-- Calendar read access.
+- Google Calendar read access.
 
 After that works, add:
 
 - Two-way TaskNotes sync.
-- Calendar write access.
+- Google Calendar write access.
+- Apple Calendar read/write access.
 - More LLM provider adapters.
 - Web app support.
 - iOS support.

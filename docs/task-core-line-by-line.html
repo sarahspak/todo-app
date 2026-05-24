@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>task-core/lib.rs Line-by-Line Guide</title>
+    <style>
+      :root {
+        --bg-top: #f4efe2;
+        --bg-bottom: #d6e2f0;
+        --panel: rgba(255, 255, 255, 0.78);
+        --panel-border: rgba(34, 52, 79, 0.18);
+        --ink: #162437;
+        --muted: #4e5f76;
+        --accent: #0f766e;
+        --accent-2: #d97706;
+        --code-bg: #111827;
+        --code-ink: #e5e7eb;
+        --focus: #ea580c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at 20% 10%, #fff6d8 0%, transparent 30%),
+          radial-gradient(circle at 84% 15%, #d8edff 0%, transparent 35%),
+          linear-gradient(150deg, var(--bg-top), var(--bg-bottom));
+      }
+
+      .grid-overlay {
+        position: fixed;
+        inset: 0;
+        background-image: linear-gradient(
+            rgba(22, 36, 55, 0.045) 1px,
+            transparent 1px
+          ),
+          linear-gradient(90deg, rgba(22, 36, 55, 0.045) 1px, transparent 1px);
+        background-size: 24px 24px;
+        pointer-events: none;
+      }
+
+      main {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 2rem 1.2rem 3rem;
+      }
+
+      .hero {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem 1.4rem;
+        align-items: baseline;
+        margin-bottom: 1.2rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.5rem, 3.2vw, 2.3rem);
+        letter-spacing: 0.02em;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      .toolbar {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        backdrop-filter: blur(10px);
+        border-radius: 14px;
+        padding: 0.9rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-bottom: 1.2rem;
+      }
+
+      .toolbar input,
+      .toolbar button,
+      .toolbar select {
+        border: 1px solid rgba(19, 33, 52, 0.2);
+        border-radius: 10px;
+        padding: 0.55rem 0.75rem;
+        font-size: 0.95rem;
+        font-family: inherit;
+        color: var(--ink);
+      }
+
+      .toolbar input {
+        flex: 1;
+        min-width: 240px;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .toolbar button,
+      .toolbar select {
+        background: rgba(255, 255, 255, 0.9);
+        cursor: pointer;
+      }
+
+      .toolbar button:hover,
+      .toolbar select:hover {
+        border-color: rgba(15, 118, 110, 0.65);
+      }
+
+      .badge {
+        padding: 0.45rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        color: #0b3c38;
+        background: rgba(15, 118, 110, 0.16);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 1rem;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 16px;
+        backdrop-filter: blur(10px);
+        overflow: hidden;
+      }
+
+      .panel-head {
+        padding: 0.7rem 0.95rem;
+        border-bottom: 1px solid rgba(22, 36, 55, 0.12);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .panel-head h2 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .code-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        max-height: 70vh;
+        overflow: auto;
+        background: linear-gradient(180deg, rgba(17, 24, 39, 0.97), rgba(17, 24, 39, 0.92));
+      }
+
+      .line {
+        display: grid;
+        grid-template-columns: 68px 1fr;
+        gap: 0.5rem;
+        padding: 0.34rem 0.75rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        color: var(--code-ink);
+        font-family: "Menlo", "Consolas", "SFMono-Regular", monospace;
+        font-size: 0.9rem;
+        white-space: pre;
+        cursor: pointer;
+        transition: background 180ms ease;
+      }
+
+      .line:hover {
+        background: rgba(217, 119, 6, 0.12);
+      }
+
+      .line.is-active {
+        background: rgba(15, 118, 110, 0.25);
+        outline: 1px solid rgba(110, 231, 183, 0.45);
+      }
+
+      .line.is-match {
+        background: rgba(234, 88, 12, 0.23);
+      }
+
+      .line-num {
+        color: #93c5fd;
+        text-align: right;
+        user-select: none;
+      }
+
+      .line-text {
+        overflow-x: auto;
+      }
+
+      .token-link {
+        color: #fde68a;
+        border-bottom: 1px dotted rgba(253, 230, 138, 0.8);
+        cursor: pointer;
+      }
+
+      .symbol-link {
+        color: #93c5fd;
+        border-bottom: 1px solid rgba(147, 197, 253, 0.75);
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .line.has-block .line-num::after {
+        content: "*";
+        color: #6ee7b7;
+        margin-left: 0.25rem;
+      }
+
+      .line.in-selected-block {
+        background: rgba(56, 189, 248, 0.14);
+      }
+
+      .detail {
+        padding: 1rem;
+        max-height: 70vh;
+        overflow: auto;
+      }
+
+      .kicker {
+        display: inline-flex;
+        gap: 0.35rem;
+        align-items: center;
+        font-size: 0.82rem;
+        color: #0b3c38;
+        background: rgba(15, 118, 110, 0.14);
+        border: 1px solid rgba(15, 118, 110, 0.3);
+        border-radius: 999px;
+        padding: 0.28rem 0.6rem;
+      }
+
+      .detail h3 {
+        margin: 0.65rem 0 0.4rem;
+        font-size: 1.1rem;
+      }
+
+      .detail p {
+        margin: 0.45rem 0;
+        line-height: 1.5;
+        color: #253852;
+      }
+
+      .detail code {
+        background: rgba(22, 36, 55, 0.11);
+        border-radius: 5px;
+        padding: 0.1rem 0.28rem;
+      }
+
+      .detail pre {
+        background: rgba(17, 24, 39, 0.92);
+        color: #d1fae5;
+        border-radius: 12px;
+        padding: 0.72rem;
+        overflow-x: auto;
+      }
+
+      .jump {
+        color: var(--accent-2);
+        font-weight: 600;
+      }
+
+      .legend {
+        margin-top: 0.7rem;
+        color: #334155;
+        font-size: 0.9rem;
+      }
+
+      .subcard {
+        margin-top: 0.9rem;
+        padding: 0.75rem;
+        border: 1px solid rgba(22, 36, 55, 0.16);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .subcard h4 {
+        margin: 0 0 0.35rem;
+        font-size: 0.98rem;
+      }
+
+      .subcard p {
+        margin: 0;
+        color: #2f455f;
+      }
+
+      @media (max-width: 920px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .code-list,
+        .detail {
+          max-height: 50vh;
+        }
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grid-overlay" aria-hidden="true"></div>
+    <main>
+      <section class="hero">
+        <h1>task-core/lib.rs, explained line by line</h1>
+        <p class="subtitle">Click any line to see what it means in plain language.</p>
+      </section>
+
+      <section class="toolbar" aria-label="controls">
+        <input
+          id="searchInput"
+          type="search"
+          placeholder="Search code or explanation (e.g. Option, trait, Scheduler)"
+          autocomplete="off"
+        />
+        <button id="prevBtn" type="button">Prev Match</button>
+        <button id="nextBtn" type="button">Next Match</button>
+        <select id="categoryFilter" aria-label="Filter by category">
+          <option value="all">All categories</option>
+          <option value="docs">Docs</option>
+          <option value="types">Types</option>
+          <option value="impl">Impl</option>
+          <option value="algo">Algorithm</option>
+          <option value="test">Tests</option>
+          <option value="syntax">Syntax</option>
+        </select>
+        <span id="matchCount" class="badge">0 matches</span>
+      </section>
+
+      <section class="layout">
+        <article class="panel" aria-label="source code panel">
+          <div class="panel-head">
+            <h2>Source</h2>
+            <span id="activeLineLabel" class="badge">Line 1</span>
+          </div>
+          <ol id="codeList" class="code-list" aria-live="polite"></ol>
+        </article>
+
+        <aside class="panel" aria-label="explanation panel">
+          <div class="panel-head">
+            <h2>Explanation</h2>
+            <span id="activeCategory" class="badge">docs</span>
+          </div>
+          <div class="detail">
+            <span id="lineKicker" class="kicker">Line 1</span>
+            <h3 id="lineTitle">Module docs</h3>
+            <p id="lineBody">Select a line in the source panel.</p>
+            <pre id="lineSnippet"></pre>
+            <div class="subcard">
+              <h4 id="tokenTitle">Keyword help</h4>
+              <p id="tokenBody">Click highlighted words like pub, struct, trait, Option, or Vec.</p>
+            </div>
+            <div class="subcard">
+              <h4 id="symbolTitle">Block summary</h4>
+              <p id="symbolBody">Click a highlighted symbol name or the line number star to view a full function/struct summary.</p>
+            </div>
+            <p class="legend">
+              Tip: Use keyboard arrows while focused on the source panel to move line by line.
+            </p>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const source = `//! Core task and scheduling types.
+
+pub type TaskId = String;
+pub type ProjectId = String;
+pub type TimestampMs = i64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskStatus {
+    Inbox,
+    Planned,
+    InProgress,
+    Done,
+    Canceled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Priority {
+    Low,
+    Normal,
+    High,
+    Urgent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeadlineType {
+    None,
+    Soft,
+    Hard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnergyLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeBlock {
+    pub start_ms: TimestampMs,
+    pub end_ms: TimestampMs,
+}
+
+impl TimeBlock {
+    pub fn duration_minutes(&self) -> i64 {
+        (self.end_ms - self.start_ms) / 60_000
+    }
+
+    pub fn overlaps(&self, other: &TimeBlock) -> bool {
+        self.start_ms < other.end_ms && other.start_ms < self.end_ms
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Task {
+    pub id: TaskId,
+    pub title: String,
+    pub notes: Option<String>,
+    pub status: TaskStatus,
+    pub priority: Priority,
+    pub due_at_ms: Option<TimestampMs>,
+    pub deadline_type: DeadlineType,
+    pub scheduled: Option<TimeBlock>,
+    pub estimate_minutes: Option<i64>,
+    pub energy_level: Option<EnergyLevel>,
+    pub context: Option<String>,
+    pub tags: Vec<String>,
+    pub project_id: Option<ProjectId>,
+    pub created_at_ms: TimestampMs,
+    pub updated_at_ms: TimestampMs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarBusyBlock {
+    pub source: String,
+    pub block: TimeBlock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleRequest {
+    pub tasks: Vec<Task>,
+    pub busy: Vec<CalendarBusyBlock>,
+    pub candidate_blocks: Vec<TimeBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledTask {
+    pub task_id: TaskId,
+    pub block: TimeBlock,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulePlan {
+    pub scheduled: Vec<ScheduledTask>,
+    pub unscheduled_task_ids: Vec<TaskId>,
+}
+
+pub trait Scheduler {
+    fn propose_schedule(&self, request: ScheduleRequest) -> SchedulePlan;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct GreedyScheduler;
+
+impl Scheduler for GreedyScheduler {
+    fn propose_schedule(&self, mut request: ScheduleRequest) -> SchedulePlan {
+        request.tasks.sort_by(|a, b| {
+            b.priority
+                .priority_rank()
+                .cmp(&a.priority.priority_rank())
+                .then_with(|| a.due_at_ms.cmp(&b.due_at_ms))
+                .then_with(|| a.created_at_ms.cmp(&b.created_at_ms))
+        });
+
+        let mut scheduled = Vec::new();
+        let mut occupied: Vec<TimeBlock> = request.busy.into_iter().map(|b| b.block).collect();
+        let mut unscheduled_task_ids = Vec::new();
+
+        for task in request.tasks {
+            let estimate = task.estimate_minutes.unwrap_or(30).max(5);
+            let placement = request
+                .candidate_blocks
+                .iter()
+                .find_map(|candidate| first_available_slot(candidate, &occupied, estimate));
+
+            match placement {
+                Some(block) => {
+                    occupied.push(block.clone());
+                    scheduled.push(ScheduledTask {
+                        task_id: task.id,
+                        block,
+                        reason: "Fits the earliest available block using priority order.".into(),
+                    });
+                }
+                None => unscheduled_task_ids.push(task.id),
+            }
+        }
+
+        SchedulePlan {
+            scheduled,
+            unscheduled_task_ids,
+        }
+    }
+}
+
+impl Priority {
+    fn priority_rank(&self) -> u8 {
+        match self {
+            Priority::Low => 0,
+            Priority::Normal => 1,
+            Priority::High => 2,
+            Priority::Urgent => 3,
+        }
+    }
+}
+
+fn first_available_slot(
+    candidate: &TimeBlock,
+    occupied: &[TimeBlock],
+    estimate_minutes: i64,
+) -> Option<TimeBlock> {
+    let duration_ms = estimate_minutes * 60_000;
+    let mut cursor = candidate.start_ms;
+    let mut overlaps: Vec<&TimeBlock> = occupied
+        .iter()
+        .filter(|block| block.overlaps(candidate))
+        .collect();
+    overlaps.sort_by_key(|block| block.start_ms);
+
+    for block in overlaps {
+        if cursor + duration_ms <= block.start_ms {
+            return Some(TimeBlock {
+                start_ms: cursor,
+                end_ms: cursor + duration_ms,
+            });
+        }
+        cursor = cursor.max(block.end_ms);
+    }
+
+    if cursor + duration_ms <= candidate.end_ms {
+        Some(TimeBlock {
+            start_ms: cursor,
+            end_ms: cursor + duration_ms,
+        })
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greedy_scheduler_uses_free_time_around_busy_blocks() {
+        let scheduler = GreedyScheduler;
+        let plan = scheduler.propose_schedule(ScheduleRequest {
+            tasks: vec![Task {
+                id: "task-1".into(),
+                title: "Write plan".into(),
+                notes: None,
+                status: TaskStatus::Inbox,
+                priority: Priority::High,
+                due_at_ms: None,
+                deadline_type: DeadlineType::None,
+                scheduled: None,
+                estimate_minutes: Some(30),
+                energy_level: None,
+                context: None,
+                tags: vec![],
+                project_id: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            }],
+            busy: vec![CalendarBusyBlock {
+                source: "calendar".into(),
+                block: TimeBlock {
+                    start_ms: 30 * 60_000,
+                    end_ms: 60 * 60_000,
+                },
+            }],
+            candidate_blocks: vec![TimeBlock {
+                start_ms: 0,
+                end_ms: 120 * 60_000,
+            }],
+        });
+
+        assert_eq!(plan.scheduled.len(), 1);
+        assert_eq!(plan.scheduled[0].block.start_ms, 0);
+        assert!(plan.unscheduled_task_ids.is_empty());
+    }
+}`;
+
+      const explanations = {
+        1: {
+          category: "docs",
+          title: "Module-level documentation",
+          body: "The //! comment style documents the entire module, so rustdoc shows this as the file summary.",
+        },
+        3: {
+          category: "types",
+          title: "Type alias: TaskId",
+          body: "TaskId is an alias of String. It improves readability by saying what a string represents.",
+        },
+        4: {
+          category: "types",
+          title: "Type alias: ProjectId",
+          body: "ProjectId is another semantic alias. Rust still stores it like String at runtime.",
+        },
+        5: {
+          category: "types",
+          title: "Type alias: TimestampMs",
+          body: "TimestampMs uses i64 for millisecond precision time values.",
+        },
+        7: {
+          category: "syntax",
+          title: "Derive common traits",
+          body: "Derive tells Rust to auto-implement Debug, Clone, and equality traits for this enum.",
+        },
+        8: {
+          category: "types",
+          title: "TaskStatus enum",
+          body: "Defines all valid lifecycle states for a task.",
+        },
+        16: {
+          category: "types",
+          title: "Priority enum",
+          body: "Priority provides ordering labels used later by the scheduler.",
+        },
+        24: {
+          category: "types",
+          title: "DeadlineType enum",
+          body: "Separates no deadline from soft or hard deadlines.",
+        },
+        31: {
+          category: "types",
+          title: "EnergyLevel enum",
+          body: "Captures subjective effort needed for a task.",
+        },
+        39: {
+          category: "types",
+          title: "TimeBlock struct",
+          body: "A closed-open time window representation via start and end millisecond timestamps.",
+        },
+        44: {
+          category: "impl",
+          title: "Implementation block for TimeBlock",
+          body: "Methods that belong to TimeBlock live inside this impl.",
+        },
+        45: {
+          category: "impl",
+          title: "duration_minutes method",
+          body: "Returns block length in minutes by subtracting and converting milliseconds.",
+        },
+        49: {
+          category: "impl",
+          title: "overlaps method",
+          body: "Checks interval overlap using strict comparisons.",
+        },
+        54: {
+          category: "types",
+          title: "Task struct",
+          body: "The central domain entity. Fields model state, metadata, timing, and tagging.",
+        },
+        57: {
+          category: "syntax",
+          title: "Option<T> means nullable",
+          body: "Option<String> means notes can be Some(text) or None, avoiding null references.",
+        },
+        65: {
+          category: "syntax",
+          title: "Vec<T> means growable list",
+          body: "tags: Vec<String> stores zero or more tag strings.",
+        },
+        73: {
+          category: "types",
+          title: "CalendarBusyBlock struct",
+          body: "Pairs a busy time block with the source system label.",
+        },
+        79: {
+          category: "types",
+          title: "ScheduleRequest struct",
+          body: "Input payload to scheduler: tasks, busy slots, and candidate windows.",
+        },
+        86: {
+          category: "types",
+          title: "ScheduledTask struct",
+          body: "Represents one placement result with an explainability reason.",
+        },
+        93: {
+          category: "types",
+          title: "SchedulePlan struct",
+          body: "Final scheduler output: placed tasks and leftover task IDs.",
+        },
+        99: {
+          category: "types",
+          title: "Scheduler trait",
+          body: "Trait defines behavior contract so multiple scheduler strategies can exist.",
+        },
+        103: {
+          category: "types",
+          title: "GreedyScheduler type",
+          body: "Unit struct with no fields. Behavior is defined by trait implementation.",
+        },
+        106: {
+          category: "impl",
+          title: "Trait implementation",
+          body: "Implements Scheduler for GreedyScheduler.",
+        },
+        108: {
+          category: "algo",
+          title: "Sort tasks by priority and urgency",
+          body: "Higher priority first, then earlier due date, then earlier creation time.",
+        },
+        116: {
+          category: "algo",
+          title: "Initialize result containers",
+          body: "scheduled and unscheduled_task_ids capture outputs. occupied tracks blocked time.",
+        },
+        120: {
+          category: "algo",
+          title: "Greedy placement loop",
+          body: "For each task, find the first available slot that fits in candidate blocks.",
+        },
+        121: {
+          category: "syntax",
+          title: "unwrap_or and max",
+          body: "Uses a default estimate of 30 minutes, then enforces minimum 5 minutes.",
+        },
+        125: {
+          category: "syntax",
+          title: "find_map pattern",
+          body: "find_map returns first Some(...) from candidate_blocks, or None if none fit.",
+        },
+        127: {
+          category: "algo",
+          title: "Match on placement result",
+          body: "If slot found, schedule it and mark occupied. If not, record unscheduled task ID.",
+        },
+        141: {
+          category: "impl",
+          title: "Return SchedulePlan",
+          body: "Constructs and returns the final plan struct.",
+        },
+        147: {
+          category: "impl",
+          title: "Priority helper impl",
+          body: "Adds internal ranking helper for sorting.",
+        },
+        148: {
+          category: "impl",
+          title: "priority_rank",
+          body: "Maps enum variants to numeric ranks used by comparison logic.",
+        },
+        158: {
+          category: "algo",
+          title: "first_available_slot helper",
+          body: "Core gap-finding helper that returns earliest interval fitting task duration.",
+        },
+        163: {
+          category: "algo",
+          title: "Convert estimate and initialize cursor",
+          body: "Converts minutes to milliseconds and starts scanning from candidate.start_ms.",
+        },
+        165: {
+          category: "algo",
+          title: "Filter overlaps",
+          body: "Collects only occupied blocks that overlap the candidate window.",
+        },
+        169: {
+          category: "algo",
+          title: "Sort overlaps",
+          body: "Sort by start time so gaps can be scanned from left to right.",
+        },
+        171: {
+          category: "algo",
+          title: "Gap check loop",
+          body: "If gap before next occupied block is large enough, return that gap as slot.",
+        },
+        178: {
+          category: "algo",
+          title: "Advance cursor",
+          body: "Moves cursor to the end of current occupied block.",
+        },
+        181: {
+          category: "algo",
+          title: "Tail gap check",
+          body: "After scanning overlaps, checks if remaining tail segment fits duration.",
+        },
+        191: {
+          category: "test",
+          title: "Compile tests only in test builds",
+          body: "#[cfg(test)] gates this module so it compiles only when running tests.",
+        },
+        196: {
+          category: "test",
+          title: "Test case name",
+          body: "Describes behavior under test: greedy scheduler should use free time around busy blocks.",
+        },
+        198: {
+          category: "test",
+          title: "Build test input",
+          body: "Creates scheduler and request with one task, one busy block, one candidate range.",
+        },
+        229: {
+          category: "test",
+          title: "Assertions",
+          body: "Verifies one task scheduled at start 0 and no unscheduled tasks.",
+        },
+      };
+
+      const fallback = {
+        category: "syntax",
+        title: "Syntax or structure line",
+        body: "This line supports surrounding declarations or control flow. Select nearby lines for richer context.",
+      };
+
+      const tokenGlossary = {
+        pub: "pub makes an item visible outside its current module.",
+        type: "type creates a type alias for readability and naming intent.",
+        struct: "struct defines a custom data type with named fields.",
+        enum: "enum defines a type that can be exactly one of several variants.",
+        trait: "trait is a behavior contract, like an interface with required methods.",
+        impl: "impl adds methods or trait behavior for a type.",
+        fn: "fn declares a function or method.",
+        let: "let binds a value to a variable name.",
+        mut: "mut means the variable binding can be changed.",
+        match: "match branches on patterns and must handle all cases.",
+        Some: "Some(value) is the present variant of Option.",
+        None: "None is the empty variant of Option.",
+        Option: "Option<T> represents either Some(T) or None.",
+        Vec: "Vec<T> is a growable heap-allocated list.",
+        Result: "Result<T, E> is success (Ok) or failure (Err).",
+        derive: "derive auto-generates trait implementations like Debug and Clone.",
+        Debug: "Debug allows a type to be formatted for developer-facing output (for example with {:?}).",
+        Clone: "Clone allows creating an explicit duplicate of a value via clone().",
+        PartialEq: "PartialEq enables equality comparisons with == and !=.",
+        Eq: "Eq marks equality as total and reflexive, strengthening PartialEq semantics.",
+        cfg: "cfg conditionally compiles code based on build configuration.",
+        mod: "mod defines a module namespace.",
+        use: "use imports names into scope.",
+        return: "return exits a function early with a value.",
+      };
+
+      const blocks = [
+        {
+          id: "task-status",
+          name: "TaskStatus",
+          kind: "enum",
+          start: 8,
+          end: 14,
+          summary: "Represents the lifecycle state of a task, from inbox capture through completion or cancellation.",
+        },
+        {
+          id: "priority",
+          name: "Priority",
+          kind: "enum",
+          start: 17,
+          end: 22,
+          summary: "Defines urgency levels used by scheduling logic to sort tasks.",
+        },
+        {
+          id: "deadlinetype",
+          name: "DeadlineType",
+          kind: "enum",
+          start: 25,
+          end: 29,
+          summary: "Distinguishes between no deadline, soft deadlines, and hard deadlines.",
+        },
+        {
+          id: "energylevel",
+          name: "EnergyLevel",
+          kind: "enum",
+          start: 32,
+          end: 36,
+          summary: "Captures the expected energy or focus demand of a task.",
+        },
+        {
+          id: "timeblock",
+          name: "TimeBlock",
+          kind: "struct",
+          start: 39,
+          end: 42,
+          summary: "Represents a time interval in milliseconds, used for scheduling and conflict checks.",
+        },
+        {
+          id: "timeblock-impl",
+          name: "impl TimeBlock",
+          kind: "impl",
+          start: 44,
+          end: 52,
+          summary: "Provides helper methods to measure a block and test overlap with another block.",
+        },
+        {
+          id: "task",
+          name: "Task",
+          kind: "struct",
+          start: 55,
+          end: 71,
+          summary: "Core domain object containing identity, status, priority, scheduling metadata, and timestamps.",
+        },
+        {
+          id: "calendarbusyblock",
+          name: "CalendarBusyBlock",
+          kind: "struct",
+          start: 74,
+          end: 77,
+          summary: "Pairs an external source label with a busy TimeBlock from a calendar.",
+        },
+        {
+          id: "schedulerequest",
+          name: "ScheduleRequest",
+          kind: "struct",
+          start: 80,
+          end: 84,
+          summary: "Input payload for scheduling: tasks to place, busy blocks, and candidate windows.",
+        },
+        {
+          id: "scheduledtask",
+          name: "ScheduledTask",
+          kind: "struct",
+          start: 87,
+          end: 91,
+          summary: "Output item representing one task assigned to one concrete block with a reason.",
+        },
+        {
+          id: "scheduleplan",
+          name: "SchedulePlan",
+          kind: "struct",
+          start: 94,
+          end: 97,
+          summary: "Final schedule output with successful placements and unscheduled task identifiers.",
+        },
+        {
+          id: "scheduler-trait",
+          name: "Scheduler",
+          kind: "trait",
+          start: 99,
+          end: 101,
+          summary: "Behavior contract for schedule engines that transform ScheduleRequest into SchedulePlan.",
+        },
+        {
+          id: "greedy-scheduler",
+          name: "GreedyScheduler",
+          kind: "struct",
+          start: 104,
+          end: 104,
+          summary: "Stateless scheduler strategy type that implements the Scheduler trait.",
+        },
+        {
+          id: "scheduler-impl",
+          name: "impl Scheduler for GreedyScheduler",
+          kind: "impl",
+          start: 106,
+          end: 144,
+          summary: "Greedy scheduling algorithm that sorts tasks, scans candidate blocks, and picks earliest fitting slots.",
+        },
+        {
+          id: "priority-impl",
+          name: "impl Priority",
+          kind: "impl",
+          start: 147,
+          end: 156,
+          summary: "Helper implementation that maps priority labels to numeric ranks for sorting.",
+        },
+        {
+          id: "first-available-slot",
+          name: "first_available_slot",
+          kind: "function",
+          start: 158,
+          end: 189,
+          summary: "Finds the earliest gap inside a candidate block that can fit the requested duration.",
+        },
+        {
+          id: "tests-mod",
+          name: "tests",
+          kind: "module",
+          start: 192,
+          end: 232,
+          summary: "Test module validating expected scheduler behavior for a simple busy-window scenario.",
+        },
+        {
+          id: "test-case",
+          name: "greedy_scheduler_uses_free_time_around_busy_blocks",
+          kind: "function",
+          start: 196,
+          end: 231,
+          summary: "Ensures the scheduler places a task in available time before a busy block and leaves none unscheduled.",
+        },
+      ];
+
+      const symbolToBlock = {
+        TaskStatus: "task-status",
+        Priority: "priority",
+        DeadlineType: "deadlinetype",
+        EnergyLevel: "energylevel",
+        TimeBlock: "timeblock",
+        Task: "task",
+        CalendarBusyBlock: "calendarbusyblock",
+        ScheduleRequest: "schedulerequest",
+        ScheduledTask: "scheduledtask",
+        SchedulePlan: "scheduleplan",
+        Scheduler: "scheduler-trait",
+        GreedyScheduler: "greedy-scheduler",
+        first_available_slot: "first-available-slot",
+        tests: "tests-mod",
+        greedy_scheduler_uses_free_time_around_busy_blocks: "test-case",
+      };
+
+      const lines = source.split("\n");
+      const codeList = document.getElementById("codeList");
+      const activeLineLabel = document.getElementById("activeLineLabel");
+      const activeCategory = document.getElementById("activeCategory");
+      const lineKicker = document.getElementById("lineKicker");
+      const lineTitle = document.getElementById("lineTitle");
+      const lineBody = document.getElementById("lineBody");
+      const lineSnippet = document.getElementById("lineSnippet");
+      const tokenTitle = document.getElementById("tokenTitle");
+      const tokenBody = document.getElementById("tokenBody");
+      const symbolTitle = document.getElementById("symbolTitle");
+      const symbolBody = document.getElementById("symbolBody");
+      const matchCount = document.getElementById("matchCount");
+      const categoryFilter = document.getElementById("categoryFilter");
+      const searchInput = document.getElementById("searchInput");
+      const nextBtn = document.getElementById("nextBtn");
+      const prevBtn = document.getElementById("prevBtn");
+
+      let activeLine = 1;
+      let activeBlockId = null;
+      let matches = [];
+      let matchCursor = -1;
+
+      function getExplanation(lineNumber) {
+        return explanations[lineNumber] || fallback;
+      }
+
+      function renderCodeLines() {
+        codeList.innerHTML = "";
+
+        lines.forEach((text, idx) => {
+          const lineNumber = idx + 1;
+          const li = document.createElement("li");
+          li.className = "line";
+          li.dataset.line = String(lineNumber);
+          li.tabIndex = 0;
+          li.setAttribute("role", "button");
+          li.setAttribute("aria-label", "Line " + lineNumber);
+
+          const num = document.createElement("span");
+          num.className = "line-num";
+          num.textContent = String(lineNumber);
+
+          const body = document.createElement("span");
+          body.className = "line-text";
+          body.innerHTML = text.length ? annotateLine(text, lineNumber) : " ";
+
+          const block = findBlockForLine(lineNumber);
+          if (block) {
+            li.classList.add("has-block");
+            li.dataset.blockId = block.id;
+          }
+
+          li.append(num, body);
+
+          li.addEventListener("click", () => setActiveLine(lineNumber, true));
+          li.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              setActiveLine(lineNumber, true);
+            }
+          });
+
+          codeList.appendChild(li);
+        });
+      }
+
+      function updateActiveClasses() {
+        codeList.querySelectorAll(".line").forEach((lineEl) => {
+          const lineNumber = Number(lineEl.dataset.line);
+          lineEl.classList.toggle("is-active", lineNumber === activeLine);
+          lineEl.classList.toggle("is-match", matches.includes(lineNumber));
+          lineEl.classList.toggle("in-selected-block", Boolean(activeBlockId) && lineEl.dataset.blockId === activeBlockId);
+        });
+      }
+
+      function escapeHtml(text) {
+        return text
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      function escapeRegExp(text) {
+        return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+
+      function annotateLine(rawText, lineNumber) {
+        let html = escapeHtml(rawText);
+
+        const keywordRegex = /\b(pub|type|struct|enum|trait|impl|fn|let|mut|match|Some|None|Option|Vec|Result|derive|Debug|Clone|PartialEq|Eq|cfg|mod|use|return)\b/g;
+        html = html.replace(
+          keywordRegex,
+          '<span class="token-link" data-token="$1" title="Click for keyword meaning">$1</span>'
+        );
+
+        const block = blocks.find((item) => item.start === lineNumber);
+        if (block) {
+          const nameRegex = new RegExp("\\b" + escapeRegExp(block.name) + "\\b");
+          html = html.replace(
+            nameRegex,
+            '<span class="symbol-link" data-symbol="' + block.name + '" title="Click for full block summary">' + block.name + "</span>"
+          );
+        }
+
+        if (lineNumber === 106) {
+          html = html.replace(
+            /\bGreedyScheduler\b/g,
+            '<span class="symbol-link" data-symbol="GreedyScheduler" title="Click for full block summary">GreedyScheduler</span>'
+          );
+          html = html.replace(
+            /\bScheduler\b/g,
+            '<span class="symbol-link" data-symbol="Scheduler" title="Click for full block summary">Scheduler</span>'
+          );
+        }
+
+        return html;
+      }
+
+      function findBlockForLine(lineNumber) {
+        return blocks.find((block) => lineNumber >= block.start && lineNumber <= block.end) || null;
+      }
+
+      function showTokenMeaning(token) {
+        const key = token in tokenGlossary ? token : null;
+        if (!key) return;
+        tokenTitle.textContent = "Keyword: " + token;
+        tokenBody.textContent = tokenGlossary[token];
+      }
+
+      function showBlockSummaryById(blockId) {
+        const block = blocks.find((item) => item.id === blockId);
+        if (!block) return;
+        activeBlockId = block.id;
+        symbolTitle.textContent = block.kind.toUpperCase() + ": " + block.name;
+        symbolBody.textContent =
+          block.summary +
+          " (Lines " +
+          block.start +
+          (block.end !== block.start ? "-" + block.end : "") +
+          ").";
+        updateActiveClasses();
+      }
+
+      function showBlockSummaryBySymbol(symbol) {
+        const blockId = symbolToBlock[symbol] || symbolToBlock[symbol.replace(/^impl\s+/, "")];
+        if (blockId) {
+          showBlockSummaryById(blockId);
+        }
+      }
+
+      function setActiveLine(lineNumber, shouldScroll) {
+        if (lineNumber < 1 || lineNumber > lines.length) return;
+        activeLine = lineNumber;
+
+        const exp = getExplanation(lineNumber);
+        const lineBlock = findBlockForLine(lineNumber);
+        activeLineLabel.textContent = "Line " + lineNumber;
+        activeCategory.textContent = exp.category;
+        lineKicker.textContent = "Line " + lineNumber;
+        lineTitle.textContent = exp.title;
+        lineBody.textContent = exp.body;
+        lineSnippet.textContent = lines[lineNumber - 1] || "(blank line)";
+
+        if (lineBlock) {
+          showBlockSummaryById(lineBlock.id);
+        }
+
+        updateActiveClasses();
+
+        if (shouldScroll) {
+          const target = codeList.querySelector('[data-line="' + lineNumber + '"]');
+          target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          target?.focus({ preventScroll: true });
+        }
+      }
+
+      function computeMatches() {
+        const q = searchInput.value.trim().toLowerCase();
+        const category = categoryFilter.value;
+
+        matches = lines
+          .map((line, idx) => {
+            const lineNumber = idx + 1;
+            const exp = getExplanation(lineNumber);
+            const searchable = (line + " " + exp.title + " " + exp.body).toLowerCase();
+            const categoryHit = category === "all" || exp.category === category;
+            const textHit = q.length === 0 || searchable.includes(q);
+            return categoryHit && textHit ? lineNumber : null;
+          })
+          .filter((v) => v !== null);
+
+        matchCursor = matches.length ? 0 : -1;
+        matchCount.textContent = matches.length + " matches";
+        updateActiveClasses();
+      }
+
+      function jumpMatch(direction) {
+        if (!matches.length) return;
+        if (direction === 1) {
+          matchCursor = (matchCursor + 1) % matches.length;
+        } else {
+          matchCursor = (matchCursor - 1 + matches.length) % matches.length;
+        }
+        setActiveLine(matches[matchCursor], true);
+      }
+
+      searchInput.addEventListener("input", () => {
+        computeMatches();
+        if (matches.length) {
+          setActiveLine(matches[0], false);
+        }
+      });
+
+      categoryFilter.addEventListener("change", () => {
+        computeMatches();
+        if (matches.length) {
+          setActiveLine(matches[0], false);
+        }
+      });
+
+      nextBtn.addEventListener("click", () => jumpMatch(1));
+      prevBtn.addEventListener("click", () => jumpMatch(-1));
+
+      codeList.addEventListener("click", (ev) => {
+        const tokenEl = ev.target.closest(".token-link");
+        if (tokenEl) {
+          ev.stopPropagation();
+          showTokenMeaning(tokenEl.dataset.token);
+          return;
+        }
+
+        const symbolEl = ev.target.closest(".symbol-link");
+        if (symbolEl) {
+          ev.stopPropagation();
+          showBlockSummaryBySymbol(symbolEl.dataset.symbol);
+          return;
+        }
+
+        const lineEl = ev.target.closest(".line");
+        if (!lineEl) return;
+
+        if (ev.target.classList.contains("line-num") && lineEl.dataset.blockId) {
+          showBlockSummaryById(lineEl.dataset.blockId);
+        }
+      });
+
+      codeList.addEventListener("keydown", (ev) => {
+        if (ev.key === "ArrowDown") {
+          ev.preventDefault();
+          setActiveLine(Math.min(lines.length, activeLine + 1), true);
+        } else if (ev.key === "ArrowUp") {
+          ev.preventDefault();
+          setActiveLine(Math.max(1, activeLine - 1), true);
+        }
+      });
+
+      renderCodeLines();
+      computeMatches();
+      setActiveLine(1, false);
+    </script>
+  </body>
+</html>
